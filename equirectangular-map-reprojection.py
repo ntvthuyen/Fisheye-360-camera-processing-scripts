@@ -1,7 +1,7 @@
 import cv2
 import torch
 from math import pi
-import numpy as np 
+import numpy as np
 
 def resize_keep_aspect_ratio(image, target_width=None, target_height=None, interpolation=cv2.INTER_LINEAR):
     """
@@ -37,13 +37,17 @@ def resize_keep_aspect_ratio(image, target_width=None, target_height=None, inter
 
     return resized_image
 
-class Mapper(torch.nn.Module):
-    
-    def __init__(self, width, height, rotation_matrix):
+class SphericalMapper(torch.nn.Module):
+
+    def __init__(self, width, height, offset):
         super(SphericalMapper, self).__init__()
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.offset = offset
         self.width = width
         self.height = height
-        self.rotation_matrix = rotation_matrix  # Rotation matrix (A)
+        #self.rotation_matrix =
+        self.recalculate_rotation_matrix() # Rotation matrix (A)
 
     def forward(self):
         """
@@ -91,38 +95,42 @@ class Mapper(torch.nn.Module):
 
         return mapx, mapy
 
-def mapping(image_path, output_path, offset=(6, -38), is_save=True):
-    # Check for CUDA availability
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    def change_offset(self, offset):
+        self.offset = offset
+        self.recalculate_rotation_matrix()
 
-    # Load the input image
-    src = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
-    if src is None:
-        raise FileNotFoundError(f"Image not found at {image_path}")
-    h, w, c = src.shape
+    def change_image_size(self, width, height):
+        self.width = width
+        self.height = height
+        self.recalculate_rotation_matrix()
 
-    # Offset calculations
-    offset_x, offset_y = offset
-    pianyi_theta = 2.0 * pi * (w / 2 - offset_x) / w - pi / 2.0
-    pianyi_phi = pi * offset_y / h
+    def recalculate_rotation_matrix(self):
+        w = self.width
+        h = self.height
+        offset = self.offset
+        offset_x, offset_y = offset
+        pianyi_theta = 2.0 * pi * (w / 2 - offset_x) / w - pi / 2.0
+        pianyi_phi = pi * offset_y / h
 
-    # Rotation matrix A
-    A = torch.zeros((3, 3), dtype=torch.float32, device=device)
-    A[0, 0] = torch.cos(torch.tensor(pianyi_theta))
-    A[0, 1] = -torch.sin(torch.tensor(pianyi_theta)) * torch.cos(torch.tensor(pianyi_phi))
-    A[0, 2] = torch.sin(torch.tensor(pianyi_theta)) * torch.sin(torch.tensor(pianyi_phi))
-    A[1, 0] = torch.sin(torch.tensor(pianyi_theta))
-    A[1, 1] = torch.cos(torch.tensor(pianyi_theta)) * torch.cos(torch.tensor(pianyi_phi))
-    A[1, 2] = -torch.cos(torch.tensor(pianyi_theta)) * torch.sin(torch.tensor(pianyi_phi))
-    A[2, 0] = 0.0
-    A[2, 1] = torch.sin(torch.tensor(pianyi_phi))
-    A[2, 2] = torch.cos(torch.tensor(pianyi_phi))
+        # Rotation matrix A
+        A = torch.zeros((3, 3), dtype=torch.float32, device=self.device)
+        A[0, 0] = torch.cos(torch.tensor(pianyi_theta))
+        A[0, 1] = -torch.sin(torch.tensor(pianyi_theta)) * torch.cos(torch.tensor(pianyi_phi))
+        A[0, 2] = torch.sin(torch.tensor(pianyi_theta)) * torch.sin(torch.tensor(pianyi_phi))
+        A[1, 0] = torch.sin(torch.tensor(pianyi_theta))
+        A[1, 1] = torch.cos(torch.tensor(pianyi_theta)) * torch.cos(torch.tensor(pianyi_phi))
+        A[1, 2] = -torch.cos(torch.tensor(pianyi_theta)) * torch.sin(torch.tensor(pianyi_phi))
+        A[2, 0] = 0.0
+        A[2, 1] = torch.sin(torch.tensor(pianyi_phi))
+        A[2, 2] = torch.cos(torch.tensor(pianyi_phi))
+        self.rotation_matrix = A  # Rotation matrix (A)
 
-    # Initialize the SphericalMapper module
-    mapper = Mapper(width=w, height=h, rotation_matrix=A).to(device)
 
-    # Compute mapx and mapy
+
+
+def spherical_mapping(src, mapper=None):
+     # Initialize the SphericalMapper module
+       # Compute mapx and mapy
     mapx, mapy = mapper()
 
     # Convert mapx and mapy to NumPy arrays for OpenCV remapping
@@ -132,15 +140,28 @@ def mapping(image_path, output_path, offset=(6, -38), is_save=True):
     # Perform remapping
     remapped = cv2.remap(src, mapx_np, mapy_np, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
 
-    # Save the result
-    #return remapped
-    if is_save:    
-        cv2.imwrite(output_path,resize_keep_aspect_ratio(remapped, target_width=1280))
-        print(f"Remapped image saved to {output_path}")
+
     return remapped
 
-
+if __name__=="__main__":
 #for i in range(36):
-for j in range(36):
-    mapping("extracted_frame.jpg", "./out/img"+str(0)+"_"+str(j)+".jpg", offset=(0, j*-100))
+    image_path = "extracted_frame.jpg"
+    for j in range(36):
 
+
+        # Check for CUDA availability
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {device}")
+
+        # Load the input image
+        src = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
+        if src is None:
+            raise FileNotFoundError(f"Image not found at {image_path}")
+        h, w, c = src.shape
+        offset = (0, j*-100)
+        # Offset calculations
+        #if mapper is None:
+        mapper = SphericalMapper(width=w, height=h, offset=offset).to(device)
+
+
+        spherical_mapping(src, mapper)
